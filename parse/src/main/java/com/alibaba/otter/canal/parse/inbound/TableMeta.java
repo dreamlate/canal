@@ -3,8 +3,9 @@ package com.alibaba.otter.canal.parse.inbound;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.taobao.tddl.dbsync.binlog.event.TableMapLogEvent;
 import org.apache.commons.lang.StringUtils;
+
+import com.taobao.tddl.dbsync.binlog.event.TableMapLogEvent;
 
 /**
  * 描述数据meta对象,mysql binlog中对应的{@linkplain TableMapLogEvent}包含的信息不全
@@ -22,8 +23,8 @@ public class TableMeta {
 
     private String          schema;
     private String          table;
-    private List<FieldMeta> fields = new ArrayList<TableMeta.FieldMeta>();
-    private String          ddl;                                          // 表结构的DDL语句
+    private List<FieldMeta> fields = new ArrayList<>();
+    private String          ddl;                       // 表结构的DDL语句
 
     public TableMeta(){
 
@@ -73,8 +74,24 @@ public class TableMeta {
         throw new RuntimeException("unknow column : " + name);
     }
 
+    /**
+     * 尝试基于列名查找一下Filed信息,找不到时返回为null
+     * 
+     * @param name
+     * @return
+     */
+    public FieldMeta tryGetFieldMetaByName(String name) {
+        for (FieldMeta meta : fields) {
+            if (meta.getColumnName().equalsIgnoreCase(name)) {
+                return meta;
+            }
+        }
+
+        return null;
+    }
+
     public List<FieldMeta> getPrimaryFields() {
-        List<FieldMeta> primarys = new ArrayList<TableMeta.FieldMeta>();
+        List<FieldMeta> primarys = new ArrayList<>();
         for (FieldMeta meta : fields) {
             if (meta.isKey()) {
                 primarys.add(meta);
@@ -127,6 +144,7 @@ public class TableMeta {
         private boolean key;
         private String  defaultValue;
         private String  extra;
+        private boolean unique;
 
         public String getColumnName() {
             return columnName;
@@ -180,10 +198,21 @@ public class TableMeta {
             this.extra = extra;
         }
 
-        public String toString() {
-            return "FieldMeta [columnName=" + columnName + ", columnType=" + columnType + ", defaultValue="
-                   + defaultValue + ", nullable=" + nullable + ", key=" + key + "]";
+        public boolean isUnique() {
+            return unique;
         }
+
+        public void setUnique(boolean unique) {
+            this.unique = unique;
+        }
+
+        @Override
+        public String toString() {
+            return "FieldMeta [columnName=" + columnName + ", columnType=" + columnType + ", nullable=" + nullable
+                   + ", key=" + key + ", defaultValue=" + defaultValue + ", extra=" + extra + ", unique=" + unique
+                   + "]";
+        }
+
     }
 
 }

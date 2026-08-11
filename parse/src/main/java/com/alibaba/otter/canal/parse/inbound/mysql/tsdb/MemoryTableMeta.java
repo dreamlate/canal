@@ -1,36 +1,40 @@
 package com.alibaba.otter.canal.parse.inbound.mysql.tsdb;
 
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
+import com.alibaba.polardbx.druid.DbType;
+import com.alibaba.polardbx.druid.sql.SQLUtils;
+import com.alibaba.polardbx.druid.sql.ast.SQLDataType;
+import com.alibaba.polardbx.druid.sql.ast.SQLDataTypeImpl;
+import com.alibaba.polardbx.druid.sql.ast.SQLExpr;
+import com.alibaba.polardbx.druid.sql.ast.SQLStatement;
+import com.alibaba.polardbx.druid.sql.ast.expr.SQLCharExpr;
+import com.alibaba.polardbx.druid.sql.ast.expr.SQLIdentifierExpr;
+import com.alibaba.polardbx.druid.sql.ast.expr.SQLMethodInvokeExpr;
+import com.alibaba.polardbx.druid.sql.ast.expr.SQLNullExpr;
+import com.alibaba.polardbx.druid.sql.ast.expr.SQLPropertyExpr;
+import com.alibaba.polardbx.druid.sql.ast.statement.SQLColumnConstraint;
+import com.alibaba.polardbx.druid.sql.ast.statement.SQLColumnDefinition;
+import com.alibaba.polardbx.druid.sql.ast.statement.SQLColumnPrimaryKey;
+import com.alibaba.polardbx.druid.sql.ast.statement.SQLColumnUniqueKey;
+import com.alibaba.polardbx.druid.sql.ast.statement.SQLCreateTableStatement;
+import com.alibaba.polardbx.druid.sql.ast.statement.SQLNotNullConstraint;
+import com.alibaba.polardbx.druid.sql.ast.statement.SQLNullConstraint;
+import com.alibaba.polardbx.druid.sql.ast.statement.SQLSelectOrderByItem;
+import com.alibaba.polardbx.druid.sql.ast.statement.SQLTableElement;
+import com.alibaba.polardbx.druid.sql.dialect.mysql.ast.MySqlPrimaryKey;
+import com.alibaba.polardbx.druid.sql.dialect.mysql.ast.MySqlUnique;
+import com.alibaba.polardbx.druid.sql.dialect.mysql.ast.expr.MySqlOrderingExpr;
+import com.alibaba.polardbx.druid.sql.repository.Schema;
+import com.alibaba.polardbx.druid.sql.repository.SchemaObject;
+import com.alibaba.polardbx.druid.sql.repository.SchemaRepository;
+import com.alibaba.polardbx.druid.sql.visitor.SQLASTOutputVisitor;
+import com.alibaba.polardbx.druid.sql.visitor.VisitorFeature;
+import com.alibaba.polardbx.druid.util.JdbcConstants;
 import org.apache.commons.lang.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import com.alibaba.druid.sql.ast.SQLDataType;
-import com.alibaba.druid.sql.ast.SQLDataTypeImpl;
-import com.alibaba.druid.sql.ast.SQLExpr;
-import com.alibaba.druid.sql.ast.SQLStatement;
-import com.alibaba.druid.sql.ast.expr.SQLCharExpr;
-import com.alibaba.druid.sql.ast.expr.SQLIdentifierExpr;
-import com.alibaba.druid.sql.ast.expr.SQLNullExpr;
-import com.alibaba.druid.sql.ast.expr.SQLPropertyExpr;
-import com.alibaba.druid.sql.ast.statement.SQLColumnConstraint;
-import com.alibaba.druid.sql.ast.statement.SQLColumnDefinition;
-import com.alibaba.druid.sql.ast.statement.SQLColumnPrimaryKey;
-import com.alibaba.druid.sql.ast.statement.SQLCreateTableStatement;
-import com.alibaba.druid.sql.ast.statement.SQLNotNullConstraint;
-import com.alibaba.druid.sql.ast.statement.SQLNullConstraint;
-import com.alibaba.druid.sql.ast.statement.SQLSelectOrderByItem;
-import com.alibaba.druid.sql.ast.statement.SQLTableElement;
-import com.alibaba.druid.sql.dialect.mysql.ast.MySqlPrimaryKey;
-import com.alibaba.druid.sql.repository.Schema;
-import com.alibaba.druid.sql.repository.SchemaObject;
-import com.alibaba.druid.sql.repository.SchemaRepository;
-import com.alibaba.druid.util.JdbcConstants;
 import com.alibaba.otter.canal.parse.inbound.TableMeta;
 import com.alibaba.otter.canal.parse.inbound.TableMeta.FieldMeta;
 import com.alibaba.otter.canal.parse.inbound.mysql.ddl.DruidDdlParser;
@@ -45,10 +49,11 @@ import com.alibaba.otter.canal.protocol.position.EntryPosition;
 public class MemoryTableMeta implements TableMetaTSDB {
 
     private Logger                       logger     = LoggerFactory.getLogger(MemoryTableMeta.class);
-    private Map<List<String>, TableMeta> tableMetas = new ConcurrentHashMap<List<String>, TableMeta>();
-    private SchemaRepository             repository = new SchemaRepository(JdbcConstants.MYSQL);
+    private Map<List<String>, TableMeta> tableMetas = new ConcurrentHashMap<>();
+    private SchemaRepository repository;
 
     public MemoryTableMeta(){
+        repository = new SchemaRepository(JdbcConstants.MYSQL);
     }
 
     @Override
@@ -56,15 +61,30 @@ public class MemoryTableMeta implements TableMetaTSDB {
         return true;
     }
 
+    @Override
+    public void destory() {
+        tableMetas.clear();
+    }
+
     public boolean apply(EntryPosition position, String schema, String ddl, String extra) {
         tableMetas.clear();
         synchronized (this) {
             if (StringUtils.isNotEmpty(schema)) {
-                repository.setDefaultSchema(schema);
+                repository.setDefaultSchema(structureSchema(schema));
             }
 
             try {
-                repository.console(ddl);
+                // druid暂时flush privileges语法解析有问题
+                if (!StringUtils.startsWithIgnoreCase(StringUtils.trim(ddl), "flush")
+                    && !StringUtils.startsWithIgnoreCase(StringUtils.trim(ddl), "grant")
+                    && !StringUtils.startsWithIgnoreCase(StringUtils.trim(ddl), "revoke")
+                    && !StringUtils.startsWithIgnoreCase(StringUtils.trim(ddl), "create user")
+                    && !StringUtils.startsWithIgnoreCase(StringUtils.trim(ddl), "alter user")
+                    && !StringUtils.startsWithIgnoreCase(StringUtils.trim(ddl), "drop user")
+                    && !StringUtils.startsWithIgnoreCase(StringUtils.trim(ddl), "create database")
+                    && !StringUtils.startsWithIgnoreCase(StringUtils.trim(ddl), "alter schema")) {
+                    repository.console(ddl);
+                }
             } catch (Throwable e) {
                 logger.warn("parse faield : " + ddl, e);
             }
@@ -88,7 +108,7 @@ public class MemoryTableMeta implements TableMetaTSDB {
                 tableMeta = tableMetas.get(keys);
                 if (tableMeta == null) {
                     Schema schemaRep = repository.findSchema(schema);
-                    if (schema == null) {
+                    if (schemaRep == null) {
                         return null;
                     }
                     SchemaObject data = schemaRep.findTable(table);
@@ -125,18 +145,32 @@ public class MemoryTableMeta implements TableMetaTSDB {
     }
 
     public Map<String, String> snapshot() {
-        Map<String, String> schemaDdls = new HashMap<String, String>();
+        Map<String, String> schemaDdls = new HashMap<>();
         for (Schema schema : repository.getSchemas()) {
-            StringBuffer data = new StringBuffer(4 * 1024);
+            StringBuilder data = new StringBuilder(4 * 1024);
             for (String table : schema.showTables()) {
                 SchemaObject schemaObject = schema.findTable(table);
-                schemaObject.getStatement().output(data);
+                // fixed issue #4899
+                // snapshot输出的DDL语句未正确处理mysql keyword
+                // 导致canal重启回滚时会出现ddl解析失败的问题
+                // schemaObject.getStatement().output(data);
+                SQLASTOutputVisitor visitor = SQLUtils.createOutputVisitor(data, DbType.mysql);
+                visitor.config(VisitorFeature.OutputNameQuote, true);
+                schemaObject.getStatement().accept(visitor);
+
                 data.append("; \n");
             }
             schemaDdls.put(schema.getName(), data.toString());
         }
 
         return schemaDdls;
+    }
+
+    private String structureSchema(String schema) {
+        if (schema.startsWith("`") && schema.endsWith("`")) {
+            return schema;
+        }
+        return "`" + schema + "`";
     }
 
     private TableMeta parse(SQLCreateTableStatement statement) {
@@ -161,6 +195,15 @@ public class MemoryTableMeta implements TableMetaTSDB {
             // String charset = getSqlName(column.getCharsetExpr());
             SQLDataType dataType = column.getDataType();
             String dataTypStr = dataType.getName();
+            if (StringUtils.equalsIgnoreCase(dataTypStr, "float")) {
+                if (dataType.getArguments().size() == 1) {
+                    int num = Integer.valueOf(dataType.getArguments().get(0).toString());
+                    if (num > 24) {
+                        dataTypStr = "double";
+                    }
+                }
+            }
+
             if (dataType.getArguments().size() > 0) {
                 dataTypStr += "(";
                 for (int i = 0; i < column.getDataType().getArguments().size(); i++) {
@@ -180,6 +223,12 @@ public class MemoryTableMeta implements TableMetaTSDB {
                 }
 
                 if (dataTypeImpl.isZerofill()) {
+                    // mysql default behaiver
+                    // 如果设置了zerofill，自动给列添加unsigned属性
+                    if (!dataTypeImpl.isUnsigned()) {
+                        dataTypStr += " unsigned";
+                    }
+
                     dataTypStr += " zerofill";
                 }
             }
@@ -201,6 +250,9 @@ public class MemoryTableMeta implements TableMetaTSDB {
                     fieldMeta.setNullable(true);
                 } else if (constraint instanceof SQLColumnPrimaryKey) {
                     fieldMeta.setKey(true);
+                    fieldMeta.setNullable(false);
+                } else if (constraint instanceof SQLColumnUniqueKey) {
+                    fieldMeta.setUnique(true);
                 }
             }
             tableMeta.addFieldMeta(fieldMeta);
@@ -211,7 +263,55 @@ public class MemoryTableMeta implements TableMetaTSDB {
                 String name = getSqlName(pk.getExpr());
                 FieldMeta field = tableMeta.getFieldMetaByName(name);
                 field.setKey(true);
+                field.setNullable(false);
             }
+        } else if (element instanceof MySqlUnique) {
+            MySqlUnique column = (MySqlUnique) element;
+            List<SQLSelectOrderByItem> uks = column.getColumns();
+            // https://github.com/alibaba/canal/issues/5094
+            // 处理一下函数索引
+            List<String> columnNames = new ArrayList<String>();
+            for (SQLSelectOrderByItem uk : uks) {
+                SQLExpr sqlName = uk.getExpr();
+                columnNames.addAll(getIndexColumnNames(sqlName));
+            }
+            // uniqe打标
+            for (String name : columnNames) {
+                FieldMeta field = tableMeta.tryGetFieldMetaByName(name);
+                if (field != null) {
+                    field.setUnique(true);
+                }
+            }
+        }
+    }
+
+    private List<String> getIndexColumnNames(SQLExpr expr) {
+        if (expr instanceof SQLMethodInvokeExpr) {
+            // 需要递归处理下函数索引, 尽可能收集一下列名
+            // 常见的case:
+            // 1. upper(col)
+            // 2. left(upper(col) , 10)
+            // 3. col(10)
+            List<SQLExpr> indexExpres = ((SQLMethodInvokeExpr) expr).getArguments();
+            List<String> columnNames = new ArrayList<String>();
+            // 加上当前列
+            columnNames.add(getSqlName(expr));
+            // 处理函数索引列
+            for (SQLExpr exArgs : indexExpres) {
+                if (exArgs instanceof SQLMethodInvokeExpr) {
+                    // 加上当前列
+                    columnNames.add(getSqlName(exArgs));
+                    columnNames.addAll(getIndexColumnNames(exArgs));
+                } else {
+                    String columnName = getSqlName(exArgs);
+                    columnNames.add(columnName);
+                }
+            }
+
+            return columnNames;
+        } else {
+            String columnName = getSqlName(expr);
+            return Arrays.asList(columnName);
         }
     }
 
@@ -228,11 +328,14 @@ public class MemoryTableMeta implements TableMetaTSDB {
             return DruidDdlParser.unescapeName(((SQLIdentifierExpr) sqlName).getName());
         } else if (sqlName instanceof SQLCharExpr) {
             return ((SQLCharExpr) sqlName).getText();
+        } else if (sqlName instanceof SQLMethodInvokeExpr) {
+            return DruidDdlParser.unescapeName(((SQLMethodInvokeExpr) sqlName).getMethodName());
+        } else if (sqlName instanceof MySqlOrderingExpr) {
+            return getSqlName(((MySqlOrderingExpr) sqlName).getExpr());
         } else {
             return sqlName.toString();
         }
     }
-    
 
     public SchemaRepository getRepository() {
         return repository;

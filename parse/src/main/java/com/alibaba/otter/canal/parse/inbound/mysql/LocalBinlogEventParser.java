@@ -55,6 +55,9 @@ public class LocalBinlogEventParser extends AbstractMysqlEventParser implements 
             ((DatabaseTableMeta) tableMetaTSDB).setConnection(metaConnection);
             ((DatabaseTableMeta) tableMetaTSDB).setFilter(eventFilter);
             ((DatabaseTableMeta) tableMetaTSDB).setBlackFilter(eventBlackFilter);
+            ((DatabaseTableMeta) tableMetaTSDB).setSnapshotInterval(tsdbSnapshotInterval);
+            ((DatabaseTableMeta) tableMetaTSDB).setSnapshotExpire(tsdbSnapshotExpire);
+            ((DatabaseTableMeta) tableMetaTSDB).init(destination);
         }
 
         tableMetaCache = new TableMetaCache(metaConnection, tableMetaTSDB);
@@ -113,7 +116,6 @@ public class LocalBinlogEventParser extends AbstractMysqlEventParser implements 
         MysqlConnection connection = new MysqlConnection(runningInfo.getAddress(),
             runningInfo.getUsername(),
             runningInfo.getPassword(),
-            connectionCharsetNumber,
             runningInfo.getDefaultDatabaseName());
         connection.getConnector().setReceiveBufferSize(64 * 1024);
         connection.getConnector().setSendBufferSize(64 * 1024);
